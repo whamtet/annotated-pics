@@ -5,6 +5,8 @@
                  [org.clojure/clojurescript "1.8.51"]
                  [reagent "0.6.0-alpha2"]
                  [alandipert/storage-atom "1.2.4"]
+;                 [frankiesardo/linked "1.2.6"]
+                 [redlobster "0.2.2-SNAPSHOT"]
                  ]
   :jvm-opts ^:replace ["-Xmx1g" "-server"]
   :plugins [[lein-npm "0.6.1"]]
