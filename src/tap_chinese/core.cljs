@@ -19,7 +19,7 @@
 (def chapters (local-storage (atom (sorted-set @current-chapter)) :chapters))
 (def new-chapter (atom ""))
 (def annotations (local-storage (atom {}) :annotations))
-(def positions (local-storage (atom {}) :positions))
+(def reference (local-storage (atom {}) :reference))
 
 (defn dissoc-in [m v]
   (if (empty? v)
@@ -68,7 +68,7 @@
 
 
 ;fs.root.getFile('log.txt', {create: true, exclusive: true}, function(fileEntry) {
-(def get-file (js/Function. "f" "opts" "cb" "e" "return tap_chinese.core.fs.root.getFile(f, opts, cb, e)"))
+(def get-file (js/Function. "f" "opts" "cb" "e" "fs.root.getFile(f, opts, cb, e)"))
 (def request-quota (js/Function. "size" "f" "return navigator.webkitPersistentStorage.requestQuota(size, f)"))
 
 (defn files-added [e]
@@ -81,10 +81,13 @@
       (str @current-chapter (.-name file))
       #js {:create true}
       (fn [file-entry]
+        (println "got file")
         (.createWriter file-entry
                        (fn [writer]
                          (set! (.-onerror writer) error-handler)
-                         (set! (.-onwriteend writer) #(swap! pics conj (.toURL file-entry)))
+                         (set! (.-onwriteend writer) #(do
+                                                        (println "written" (.toURL file-entry))
+                                                        (swap! pics conj (.toURL file-entry))))
                          (let [fr (js/FileReader.)]
                            (set! (.-onerror fr) error-handler)
                            (set! (.-onloadend fr)
@@ -93,7 +96,7 @@
                            (.readAsArrayBuffer fr file)))))
       error-handler)))
 
-(defn read-annotation [s]
+(defn read-reference [s]
   (into {}
         (for [line (.split s "\n")
               :when (not-empty (.trim line))
@@ -101,7 +104,7 @@
           (let [[k & vs] (.split line " ")]
             [(int k) (apply str (interpose " " vs))]))))
 
-(defn annotation-added [e]
+(defn reference-added [e]
   (let [
          file (-> e .-target .-files array-seq first)
          fr (js/FileReader.)
@@ -109,66 +112,85 @@
     (set! (.-onerror fr) error-handler)
     (set! (.-onloadend fr)
           (fn []
-            (swap! annotations assoc @current-chapter (read-annotation (.-result fr)))))
+            (swap! reference assoc @current-chapter (read-reference (.-result fr)))))
     (.readAsText fr file)))
+
+(defn bullets [src]
+  [:div
+   (for [[[position-x position-y] note] (get-in @annotations [@current-chapter src])]
+     ^{:key (str position-x position-y note)}
+     [:img {:style {:position "absolute" :left position-x :top position-y :width 32 :height 32}
+            :on-click #(js/alert note)
+            :src "cross.png"
+            }
+      ])])
+
+(defn cancellation [src]
+  [:div
+   [:input {:type "button"
+            :value "X"
+            :on-click (fn []
+                        (when (js/confirm "Delete Pic?")
+                          (swap! pics disj src)
+                          (js/webkitResolveLocalFileSystemURL src #(.remove % (fn [])))))
+            }] " "
+   (for [[[position-x position-y] note] (get-in @annotations [@current-chapter src])]
+     ^{:key (str position-x position-y note)}
+     [:input {:type "button"
+              :value note
+              :on-click #(swap! annotations dissoc-in [@current-chapter src [position-x position-y]])}])])
 
 (defn img [src]
   (let [
-         file-name (last (.split src "/"))
+         file-name (js/decodeURIComponent (last (.split src "/")))
          pattern (re-pattern (str @current-chapter ".*jpg"))
          ]
     (if (re-find pattern file-name)
       [:div
        [:div
-        [:input {:type "button"
-                 :value "X"
-                 :on-click (fn []
-                             (swap! pics disj src)
-                             ;(swap! positions dissoc-in [@current-chapter src])
-                             (js/webkitResolveLocalFileSystemURL src #(.remove % (fn []))))
-                 }]
-        (for [annotation-number (sort (map first (get-in @positions [@current-chapter src])))]
-          ^{:key (str "delete-button-" annotation-number)}
-          [:input {:type "button"
-                   :value annotation-number
-                   :on-click #(swap! positions dissoc-in [@current-chapter src annotation-number])}])
+        [cancellation src]
         ]
-       [:div {:style {:position "relative"}}
-        [:img {:src src
-               :style {:width 1000}
-               :on-click (fn [e]
-                           (let [
-                                  target (js/$ (.-target e))
-                                  picture-position (.offset target)
-                                  picture-x (- (.-pageX e) (.-left picture-position))
-                                  picture-y (- (.-pageY e) (.-top picture-position))
-                                  annotation-number (int (js/prompt "Annotation Number"))
-                                  ]
-                             (when (pos? annotation-number)
-                               (swap! positions assoc-in [@current-chapter src annotation-number] [picture-x picture-y]))
-                             ))
-               }]
+       [:div {:style {
+                       :position "relative"
+                       }}
+        [:div {:style {:height 1000}}
+         [:img {:src src
+                :style {:width 1000
+                        :-webkit-transform "translateX(-20%) rotate(90deg) translateX(100%)"
+                        :-webkit-transform-origin "top right"
+                        }
+                :on-click (fn [e] ;192, 8
+                            (let [
+                                   target (js/$ (.-target e))
+                                   picture-position (.offset target)
+                                   picture-x (- (.-pageX e) (.-left picture-position) -58)
+                                   picture-y (- (.-pageY e) (.-top picture-position) )
+                                   note (js/prompt "Note")
+                                   note2 (if (pos? (int note))
+                                          (get-in @reference [@current-chapter (int note)])
+                                          note)
+                                   ]
+                              (when (and (pos? (int note)) (not note2))
+                                (js/alert "No reference loaded"))
+                              (when note2
+                                (swap! annotations assoc-in [@current-chapter src [picture-x picture-y]] note2))))
+                }]]
         ;BulletFeatUnique.png
-        (for [[annotation-number [picture-x picture-y]] (get-in @positions [@current-chapter src])
-              ]
-          ^{:key (str annotation-number picture-x picture-y)}
-          [:img {:style {:position "absolute" :left picture-x :top picture-y}
-                 :on-click #(js/alert (get-in @annotations [@current-chapter annotation-number]))
-                 :src "BulletFeatUnique.png"}])
-        ]]
-      [:div])))
+        [bullets src]
+        ]
+       ]
+      [:div (println "failed" src)])))
 
 (defn body []
   [:div
-   [:div (pr-str @annotations)]
    "Picture "
    [:input {:type "file"
             :multiple true
             :on-change files-added
             }] [:br][:br]
-   "Annotation "
+   "Reference "
    [:input {:type "file"
-            :on-change annotation-added}] [:br][:br]
+            :on-change reference-added}] [:br][:br]
    [chapter-div] [:br][:br]
    (map-indexed
      (fn [i src]
@@ -180,7 +202,7 @@
 (defn list-fs []
   (promise
     (let [
-           dir-reader (-> fs .-root .createReader)
+           dir-reader (-> js/fs .-root .createReader)
            all-results (atom ())
            ]
       ((fn f []
@@ -213,7 +235,7 @@
                    js/window.PERSISTENT
                    bytes-granted
                    #(do
-                      (def fs %)
+                      (set! js/fs %)
                       (fs-ready)
                       ))))
 
